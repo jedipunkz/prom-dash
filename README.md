@@ -1,36 +1,58 @@
 # Prometheus Dashboard
 
-レトロスタイルのTUIベースPrometheusメトリクスダッシュボード
+A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics visualization.
 
-## 機能
+![Prometheus Dashboard](pix/prometheus-dash.png)
 
-- Prometheusサーバーからリアルタイムでメトリクスを取得
-- レトロゲーム風のビジュアライゼーション
-- チェッカーボードパターンでデータを表示
-- タイマー、スコア、統計情報の表示
+## Features
 
-## セットアップ
+- Real-time metrics visualization from Prometheus
+- Retro game-inspired design with beige/tan color scheme
+- Time-series graphs for multiple metrics
+- Dynamic vertical scaling for better visualization
+- Configurable refresh intervals (default: 500ms)
+- Monitors CPU usage, network bytes, and network packets
 
-1. 依存関係のインストール:
+## Prerequisites
+
+- [Bun](https://bun.sh/) runtime
+- Docker and Docker Compose (for running Prometheus and Node Exporter)
+
+## Quick Start
+
+### 1. Install dependencies
+
 ```bash
 bun install
 ```
 
-2. Prometheusサーバーの起動（Dockerを使用）:
+### 2. Start Prometheus and Node Exporter
+
 ```bash
 cd example
 docker compose up -d
 cd ..
 ```
 
-3. ダッシュボードの起動:
+This will start:
+- Prometheus server on `http://localhost:9090`
+- Node Exporter on `http://localhost:9100`
+
+### 3. Run the dashboard
+
 ```bash
 bun start
 ```
 
-## 設定
+or in development mode with hot reload:
 
-`prometheus-dash.yaml` でPrometheusサーバーの設定とメトリクスクエリをカスタマイズできます:
+```bash
+bun run dev
+```
+
+## Configuration
+
+Edit `prometheus-dash.yaml` to customize metrics and connection settings:
 
 ```yaml
 prometheus:
@@ -38,28 +60,32 @@ prometheus:
   port: 9090
   protocol: http
 
-refresh_interval: 1000  # ミリ秒
+refresh_interval: 500  # milliseconds
 
 metrics:
   - name: cpu_usage
-    query: 'rate(node_cpu_seconds_total{mode="user"}[1m])'
-  # ... 他のメトリクス
+    query: 'sum(rate(node_cpu_seconds_total{mode!="idle"}[10s]))'
+  - name: net_receive_bytes
+    query: 'rate(node_network_receive_bytes_total{device="eth0"}[10s])'
+  - name: net_transmit_bytes
+    query: 'rate(node_network_transmit_bytes_total{device="eth0"}[10s])'
+  - name: net_receive_packets
+    query: 'rate(node_network_receive_packets_total{device="eth0"}[10s])'
+  - name: net_transmit_packets
+    query: 'rate(node_network_transmit_packets_total{device="eth0"}[10s])'
 ```
 
-## 操作方法
+## Usage
 
-- `q` または `ESC` または `Ctrl+C`: 終了
+### Controls
 
-## プロジェクト構成
+- `q` or `ESC` or `Ctrl+C`: Exit the dashboard
 
-```
-.
-├── prometheus-dash.yaml  # 設定ファイル
-├── package.json
-├── tsconfig.json
-├── src/
-│   └── index.ts          # メインアプリケーション
-└── example/              # Docker Compose設定
-    ├── docker-compose.yml
-    └── prometheus.yml
-```
+## License
+
+MIT License
+
+## Author
+
+jedipunkz
+
