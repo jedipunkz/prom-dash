@@ -1,0 +1,17 @@
+{
+  "name": "prometheus-dash",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/js-yaml": "^4.0.9"
+  }
+}
