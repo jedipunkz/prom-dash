@@ -7,11 +7,9 @@ A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics vis
 ## Features
 
 - Real-time metrics visualization from Prometheus
-- Retro game-inspired design with beige/tan color scheme
 - Time-series graphs for multiple metrics
 - Dynamic vertical scaling for better visualization
 - Configurable refresh intervals (default: 500ms)
-- Monitors CPU usage, network bytes, and network packets
 
 ## Prerequisites
 
