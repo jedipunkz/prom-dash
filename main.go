@@ -311,7 +311,14 @@ func (d *dashboard) draw(w, h int) []byte {
 		if d.gfx == gfxKitty {
 			b.WriteString(kittyClearAll)
 		}
+		bg := d.th.bg
 		for _, j := range jobs {
+			// Blank the area first: skipped cells are never redrawn, so text left there
+			// (e.g. from a previous terminal size) would otherwise stay around the image
+			for r := range graphRows {
+				fmt.Fprintf(&b, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm%s", j.row+r+1, j.col+1, bg.R, bg.G, bg.B, strings.Repeat(" ", graphCols))
+			}
+			b.WriteString("\x1b[0m")
 			img := renderChart(j.vals, graphCols, graphRows, j.lo, j.hi, d.th)
 			b.WriteString(placeImage(d.gfx, img, j.row, j.col, graphCols, graphRows))
 		}
