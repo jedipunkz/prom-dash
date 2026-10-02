@@ -7,7 +7,9 @@ A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics vis
 ## Features
 
 - Real-time metrics visualization from Prometheus
-- Time-series graphs for multiple metrics
+- Braille line graphs (2x4 dots per cell) with Y-axis labels
+- History fetched via `query_range`, so graphs are filled immediately on startup
+- Multiple series per query, drawn in different colors with a legend
 - Dynamic vertical scaling for better visualization
 - Configurable refresh intervals (default: 500ms)
 
@@ -59,6 +61,7 @@ prometheus:
   protocol: http
 
 refresh_interval: 500  # milliseconds
+range: 300  # seconds of history to display (default: 300)
 
 metrics:
   - name: cpu_usage
