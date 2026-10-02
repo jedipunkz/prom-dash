@@ -7,7 +7,8 @@ A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics vis
 ## Features
 
 - Real-time metrics visualization from Prometheus
-- Braille line graphs (2x4 dots per cell) with Y-axis labels
+- Pixel-level graphs on terminals with image support (kitty graphics protocol / iTerm2 inline images), braille line graphs (2x4 dots per cell) elsewhere
+- Color themes: retro, tokyonight, kanagawa-wave, solarized, dracula, gruvbox
 - History fetched via `query_range`, so graphs are filled immediately on startup
 - Multiple series per query, drawn in different colors with a legend
 - Dynamic vertical scaling for better visualization
@@ -59,6 +60,8 @@ prometheus:
 
 refresh_interval: 500  # milliseconds
 range: 300  # seconds of history to display (default: 300)
+theme: retro  # retro (default), tokyonight, kanagawa-wave, solarized, dracula, gruvbox
+graphics: auto  # auto (default), kitty, iterm2, braille
 
 metrics:
   - name: cpu_usage
@@ -72,6 +75,18 @@ metrics:
   - name: net_transmit_packets
     query: 'rate(node_network_transmit_packets_total{device="eth0"}[10s])'
 ```
+
+### Graphics
+
+`graphics: auto` picks the renderer from the environment:
+
+| Terminal | Renderer |
+|---|---|
+| kitty, Ghostty, WezTerm (also inside herdr) | kitty graphics protocol |
+| iTerm2 | iTerm2 inline images |
+| inside tmux / zellij, others | braille |
+
+Set `kitty`, `iterm2` or `braille` explicitly to override.
 
 ## Usage
 
