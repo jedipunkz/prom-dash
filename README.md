@@ -1,6 +1,6 @@
-# Prometheus Dashboard
+# Prometheus Dashboard TUI
 
-A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics visualization.
+A TUI (Terminal User Interface) dashboard for Prometheus metrics visualization.
 
 ![Prometheus Dashboard](pix/prometheus-dash.png)
 
