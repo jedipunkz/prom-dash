@@ -15,18 +15,12 @@ A retro-style TUI (Terminal User Interface) dashboard for Prometheus metrics vis
 
 ## Prerequisites
 
-- [Bun](https://bun.sh/) runtime
+- [Go](https://go.dev/) 1.27+
 - Docker and Docker Compose (for running Prometheus and Node Exporter)
 
 ## Quick Start
 
-### 1. Install dependencies
-
-```bash
-bun install
-```
-
-### 2. Start Prometheus and Node Exporter
+### 1. Start Prometheus and Node Exporter
 
 ```bash
 cd example
@@ -38,17 +32,20 @@ This will start:
 - Prometheus server on `http://localhost:9090`
 - Node Exporter on `http://localhost:9100`
 
-### 3. Run the dashboard
+### 2. Run the dashboard
 
 ```bash
-bun start
+go run .
 ```
 
-or in development mode with hot reload:
+or build a binary:
 
 ```bash
-bun run dev
+go build -o prometheus-dash .
+./prometheus-dash
 ```
+
+The dashboard reads `prometheus-dash.yaml` from the current directory.
 
 ## Configuration
 

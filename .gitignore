@@ -48,3 +48,6 @@ example/prometheus-data/
 tmp/
 temp/
 *.tmp
+
+# Binary
+/prometheus-dash
