@@ -46,6 +46,8 @@ go build -o prom-dash .
 ./prom-dash
 ```
 
+`make build` / `make run` / `make test` / `make vet` / `make clean` are also available.
+
 The dashboard reads `~/.config/prom-dash/prom-dash.yaml` if it exists, otherwise `prom-dash.yaml` in the current directory.
 
 Keys: `1`-`4` switch the displayed range to `span1`-`span4`, `q` / `ESC` quits. The dashboard starts with `range`.
