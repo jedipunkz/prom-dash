@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"io"
 	"maps"
 	"math"
@@ -31,11 +32,7 @@ const (
 	yLabelWidth = 12
 	gridWidth   = 80
 	maxMetrics  = 5
-	bgColor     = "48;2;186;177;161" // beige background (truecolor SGR)
 )
-
-// SGR foreground codes per series: black, red, blue, magenta, green
-var seriesColors = []int{30, 31, 34, 35, 32}
 
 type config struct {
 	Prometheus struct {
@@ -45,6 +42,8 @@ type config struct {
 	} `yaml:"prometheus"`
 	RefreshInterval int     `yaml:"refresh_interval"` // milliseconds
 	Range           float64 `yaml:"range"`            // seconds of history to display
+	Theme           string  `yaml:"theme"`
+	Graphics        string  `yaml:"graphics"` // auto, kitty, iterm2, braille
 	Metrics         []struct {
 		Name  string `yaml:"name"`
 		Query string `yaml:"query"`
@@ -60,9 +59,21 @@ type dashboard struct {
 	cfg    config
 	client *http.Client
 	start  time.Time
+	th     theme
+	gfx    graphicsMode
+	points int // samples fetched per series
 
-	mu   sync.Mutex
-	data map[string][]series
+	mu      sync.Mutex
+	data    map[string][]series
+	version int    // bumped on every data update
+	imgKey  string // what the charts on screen were drawn from; redraw images when it changes
+}
+
+// chartJob is a chart to be drawn as an image at a cell position.
+type chartJob struct {
+	row, col int
+	vals     [][]float64
+	lo, hi   float64
 }
 
 func loadConfig(path string) (config, error) {
@@ -83,12 +94,12 @@ func loadConfig(path string) (config, error) {
 	return cfg, nil
 }
 
-// fetchRange fetches the whole display window via query_range, one sample per dot column.
+// fetchRange fetches the whole display window via query_range, d.points samples per series.
 func (d *dashboard) fetchRange(query string) ([]series, error) {
-	step := d.cfg.Range / (graphPoints - 1)
+	step := d.cfg.Range / float64(d.points-1)
 	// Align to step so samples don't shift between refreshes
 	end := math.Floor(float64(time.Now().UnixMilli())/1000/step) * step
-	start := end - step*(graphPoints-1)
+	start := end - step*float64(d.points-1)
 	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 	params := url.Values{"query": {query}, "start": {f(start)}, "end": {f(end)}, "step": {f(step)}}
 	u := fmt.Sprintf("%s://%s:%d/api/v1/query_range?%s",
@@ -118,7 +129,7 @@ func (d *dashboard) fetchRange(query string) ([]series, error) {
 
 	out := make([]series, 0, len(body.Data.Result))
 	for _, r := range body.Data.Result {
-		values := make([]float64, graphPoints)
+		values := make([]float64, d.points)
 		for i := range values {
 			values[i] = math.NaN()
 		}
@@ -127,7 +138,7 @@ func (d *dashboard) fetchRange(query string) ([]series, error) {
 			s, _ := p[1].(string)
 			v, err := strconv.ParseFloat(s, 64)
 			x := int(math.Round((ts - start) / step))
-			if err == nil && x >= 0 && x < graphPoints && !math.IsInf(v, 0) {
+			if err == nil && x >= 0 && x < d.points && !math.IsInf(v, 0) {
 				values[x] = v
 			}
 		}
@@ -157,6 +168,7 @@ func (d *dashboard) collect() {
 			}
 			d.mu.Lock()
 			d.data[m.Name] = s
+			d.version++
 			d.mu.Unlock()
 		})
 	}
@@ -181,32 +193,28 @@ func formatValue(name string, v float64) string {
 }
 
 type style struct {
-	fg   int // SGR foreground code
+	fg   color.RGBA
 	bold bool
 }
 
-var (
-	plain = style{fg: 30}
-	bold  = style{fg: 30, bold: true}
-)
-
 type cell struct {
-	ch rune
-	st style
+	ch   rune
+	st   style
+	skip bool // covered by an image: never written, so the image isn't overwritten
 }
 
-// screen is a full-frame buffer; every frame redraws all cells so no clear is needed.
+// screen is a full-frame buffer; every frame redraws all cells except image areas, so no clear is needed.
 type screen struct {
 	w, h  int
 	cells [][]cell
 }
 
-func newScreen(w, h int) *screen {
+func newScreen(w, h int, plain style) *screen {
 	s := &screen{w: w, h: h, cells: make([][]cell, h)}
 	for r := range s.cells {
 		s.cells[r] = make([]cell, w)
 		for c := range s.cells[r] {
-			s.cells[r][c] = cell{' ', plain}
+			s.cells[r][c] = cell{ch: ' ', st: plain}
 		}
 	}
 	return s
@@ -220,22 +228,37 @@ func (s *screen) put(row, col int, text string, st style) {
 	}
 	for _, ch := range text {
 		if col >= 0 && col < s.w {
-			s.cells[row][col] = cell{ch, st}
+			s.cells[row][col].ch, s.cells[row][col].st = ch, st
 		}
 		col++
 	}
 }
 
-func (s *screen) bytes() []byte {
-	var b bytes.Buffer
-	b.WriteString("\x1b[?2026h") // synchronized output: no flicker on terminals that support it
+func (s *screen) skipArea(row, col, cols, rows int) {
+	for r := row; r < min(row+rows, s.h); r++ {
+		for c := max(col, 0); c < min(col+cols, s.w); c++ {
+			s.cells[r][c].skip = true
+		}
+	}
+}
+
+// bytes serializes the screen as truecolor SGR, jumping over skipped cells.
+func (s *screen) bytes(b *bytes.Buffer, bg color.RGBA) {
 	for r, row := range s.cells {
-		fmt.Fprintf(&b, "\x1b[%d;1H", r+1)
 		var cur style
+		moved := false
 		for c, cl := range row {
-			if c == 0 || cl.st != cur {
+			if cl.skip {
+				moved = false
+				continue
+			}
+			if !moved {
+				fmt.Fprintf(b, "\x1b[%d;%dH", r+1, c+1)
+				moved = true
+			}
+			if c == 0 || cl.st != cur || row[c-1].skip {
 				cur = cl.st
-				fmt.Fprintf(&b, "\x1b[0;%s;%d", bgColor, cur.fg)
+				fmt.Fprintf(b, "\x1b[0;48;2;%d;%d;%d;38;2;%d;%d;%d", bg.R, bg.G, bg.B, cur.fg.R, cur.fg.G, cur.fg.B)
 				if cur.bold {
 					b.WriteString(";1")
 				}
@@ -244,12 +267,12 @@ func (s *screen) bytes() []byte {
 			b.WriteRune(cl.ch)
 		}
 	}
-	b.WriteString("\x1b[0m\x1b[?2026l")
-	return b.Bytes()
+	b.WriteString("\x1b[0m")
 }
 
 func (d *dashboard) draw(w, h int) []byte {
-	s := newScreen(w, h)
+	plain, muted, bold := style{fg: d.th.fg}, style{fg: d.th.muted}, style{fg: d.th.fg, bold: true}
+	s := newScreen(w, h, plain)
 	el := int(time.Since(d.start).Seconds())
 	s.put(1, 2, fmt.Sprintf("%02d:%02d:%02d", el/3600%100, el/60%60, el%60), bold)
 
@@ -269,7 +292,7 @@ func (d *dashboard) draw(w, h int) []byte {
 	score := fmt.Sprintf("%d DR %d", total, len(d.data))
 	s.put(1, w-2-len(score), score, bold)
 
-	d.drawGrid(s, 3, max((w-gridWidth)/2, 0))
+	jobs := d.drawGrid(s, 3, max((w-gridWidth)/2, 0))
 
 	avg := 0
 	if len(d.data) > 0 {
@@ -277,11 +300,29 @@ func (d *dashboard) draw(w, h int) []byte {
 	}
 	stats := fmt.Sprintf("%d | %d", total, avg)
 	s.put(h-3, (w-len(stats))/2, stats, bold)
-	s.put(h-1, 0, "--- | Press q or ESC to quit", plain)
-	return s.bytes()
+	s.put(h-1, 0, "--- | Press q or ESC to quit", muted)
+
+	var b bytes.Buffer
+	b.WriteString("\x1b[?2026h") // synchronized output: no flicker on terminals that support it
+	s.bytes(&b, d.th.bg)
+	// Images only change with data or layout; re-sending them every frame would be wasteful
+	if key := fmt.Sprint(d.version, w, h); d.gfx != gfxBraille && key != d.imgKey {
+		d.imgKey = key
+		if d.gfx == gfxKitty {
+			b.WriteString(kittyClearAll)
+		}
+		for _, j := range jobs {
+			img := renderChart(j.vals, graphCols, graphRows, j.lo, j.hi, d.th)
+			b.WriteString(placeImage(d.gfx, img, j.row, j.col, graphCols, graphRows))
+		}
+	}
+	b.WriteString("\x1b[?2026l")
+	return b.Bytes()
 }
 
-func (d *dashboard) drawGrid(s *screen, line, left int) {
+func (d *dashboard) drawGrid(s *screen, line, left int) []chartJob {
+	plain, muted, bold := style{fg: d.th.fg}, style{fg: d.th.muted}, style{fg: d.th.accent, bold: true}
+	var jobs []chartJob
 	shown := 0
 	for _, m := range d.cfg.Metrics {
 		ss, ok := d.data[m.Name]
@@ -291,7 +332,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 		shown++
 
 		s.put(line, left, m.Name, bold)
-		s.put(line, left+len(m.Name), fmt.Sprintf("  (last %gs)", d.cfg.Range), plain)
+		s.put(line, left+len(m.Name), fmt.Sprintf("  (last %gs)", d.cfg.Range), muted)
 		line++
 
 		lo, hi := math.Inf(1), math.Inf(-1)
@@ -305,7 +346,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 			}
 		}
 		if math.IsInf(lo, 1) {
-			s.put(line, left, "No data", plain)
+			s.put(line, left, "No data", muted)
 			line += 2
 			continue
 		}
@@ -318,7 +359,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 			lo, hi = lo-pad, hi+pad
 		}
 
-		for r, row := range plotBraille(vals, graphCols, graphRows, lo, hi) {
+		for r := range graphRows {
 			label, tick := "", "│"
 			switch r {
 			case 0:
@@ -326,17 +367,27 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 			case graphRows - 1:
 				label, tick = formatValue(m.Name, lo), "┤"
 			}
-			s.put(line, left, fmt.Sprintf("%*s %s", yLabelWidth, label, tick), plain)
-			for c, bc := range row {
-				st := plain
-				if bc.series >= 0 {
-					st.fg = seriesColors[bc.series%len(seriesColors)]
-				}
-				s.put(line, left+yLabelWidth+2+c, string(bc.ch), st)
-			}
-			line++
+			s.put(line+r, left, fmt.Sprintf("%*s", yLabelWidth, label), plain)
+			s.put(line+r, left+yLabelWidth+1, tick, muted)
 		}
-		s.put(line, left+yLabelWidth+1, "└"+strings.Repeat("─", graphCols), plain)
+		chartCol := left + yLabelWidth + 2
+		// An image scrolls the screen if it doesn't fit, so fall back to braille near the bottom
+		if d.gfx != gfxBraille && line+graphRows < s.h && chartCol+graphCols <= s.w {
+			s.skipArea(line, chartCol, graphCols, graphRows)
+			jobs = append(jobs, chartJob{line, chartCol, vals, lo, hi})
+		} else {
+			for r, row := range plotBraille(vals, graphCols, graphRows, lo, hi) {
+				for c, bc := range row {
+					st := plain
+					if bc.series >= 0 {
+						st.fg = d.th.seriesColor(bc.series)
+					}
+					s.put(line+r, chartCol+c, string(bc.ch), st)
+				}
+			}
+		}
+		line += graphRows
+		s.put(line, left+yLabelWidth+1, "└"+strings.Repeat("─", graphCols), muted)
 		line++
 
 		// Legend: one entry per series with its latest value, as many as fit on one line
@@ -358,7 +409,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 			if col-left+n > 78 {
 				continue
 			}
-			s.put(line, col, text, style{fg: seriesColors[i%len(seriesColors)]})
+			s.put(line, col, text, style{fg: d.th.seriesColor(i)})
 			col += n + 2
 		}
 		line++
@@ -366,6 +417,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) {
 	if shown == 0 {
 		s.put(line, left, "Waiting for metrics...", plain)
 	}
+	return jobs
 }
 
 func main() {
@@ -374,10 +426,27 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	th, err := lookupTheme(cfg.Theme)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	gfx, err := detectGraphics(cfg.Graphics)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	points := graphPoints
+	if gfx != gfxBraille {
+		points = graphCols * cellPxW / 2 // one sample per 2 px
+	}
 	d := &dashboard{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 5 * time.Second},
 		start:  time.Now(),
+		th:     th,
+		gfx:    gfx,
+		points: points,
 		data:   map[string][]series{},
 	}
 
