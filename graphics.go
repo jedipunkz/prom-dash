@@ -16,8 +16,8 @@ type graphicsMode int
 
 const (
 	gfxBraille graphicsMode = iota
-	gfxKitty                // kitty graphics protocol: kitty, Ghostty
-	gfxITerm2               // iTerm2 inline images: WezTerm, iTerm2
+	gfxKitty                // kitty graphics protocol: kitty, Ghostty, WezTerm (also inside herdr)
+	gfxITerm2               // iTerm2 inline images: iTerm2
 )
 
 // Charts are rendered at a fixed pixel size per cell and scaled by the terminal.
@@ -39,13 +39,16 @@ func detectGraphics(setting string) (graphicsMode, error) {
 	default:
 		return gfxBraille, fmt.Errorf("unknown graphics %q (available: auto, kitty, iterm2, braille)", setting)
 	}
-	if os.Getenv("TMUX") != "" {
-		return gfxBraille, nil // tmux drops image escapes unless passthrough is configured
+	// tmux and zellij drop image escapes. herdr keeps the outer terminal's TERM_PROGRAM
+	// and renders only kitty graphics, which is why WezTerm maps to kitty, not iTerm2.
+	if os.Getenv("TMUX") != "" || os.Getenv("ZELLIJ") != "" {
+		return gfxBraille, nil
 	}
-	switch tp := os.Getenv("TERM_PROGRAM"); {
-	case os.Getenv("KITTY_WINDOW_ID") != "", os.Getenv("TERM") == "xterm-kitty", tp == "ghostty":
+	switch tp := strings.ToLower(os.Getenv("TERM_PROGRAM")); {
+	case os.Getenv("KITTY_WINDOW_ID") != "", os.Getenv("TERM") == "xterm-kitty",
+		os.Getenv("TERM") == "xterm-ghostty", tp == "ghostty", tp == "wezterm":
 		return gfxKitty, nil
-	case tp == "WezTerm", tp == "iTerm.app":
+	case tp == "iterm.app":
 		return gfxITerm2, nil
 	}
 	return gfxBraille, nil
@@ -128,7 +131,8 @@ func abs(v int) int  { return max(v, -v) }
 func sign(v int) int { return min(max(v, -1), 1) }
 
 // placeImage returns the escape sequence that draws img at (row, col) over cols x rows cells.
-func placeImage(mode graphicsMode, img image.Image, row, col, cols, rows int) string {
+// id identifies the chart slot so a redraw replaces its image instead of stacking another.
+func placeImage(mode graphicsMode, img image.Image, row, col, cols, rows, id int) string {
 	var buf bytes.Buffer
 	png.Encode(&buf, img) // writing to a bytes.Buffer cannot fail
 	data := base64.StdEncoding.EncodeToString(buf.Bytes())
@@ -140,7 +144,9 @@ func placeImage(mode graphicsMode, img image.Image, row, col, cols, rows int) st
 			buf.Len(), cols, rows, data)
 		return b.String()
 	}
-	// kitty: payload is sent in 4096-byte chunks; C=1 keeps the cursor still, q=2 silences replies
+	// kitty: payload is sent in 4096-byte chunks; C=1 keeps the cursor still, q=2 silences replies.
+	// Delete the old image first: not every terminal replaces a placement re-sent under the same ids.
+	b.WriteString(kittyDelete(id))
 	for i := 0; i < len(data); i += 4096 {
 		more := 0
 		if i+4096 < len(data) {
@@ -148,7 +154,7 @@ func placeImage(mode graphicsMode, img image.Image, row, col, cols, rows int) st
 		}
 		chunk := data[i:min(i+4096, len(data))]
 		if i == 0 {
-			fmt.Fprintf(&b, "\x1b_Ga=T,f=100,c=%d,r=%d,C=1,q=2,m=%d;%s\x1b\\", cols, rows, more, chunk)
+			fmt.Fprintf(&b, "\x1b_Ga=T,f=100,i=%d,p=1,c=%d,r=%d,C=1,q=2,m=%d;%s\x1b\\", id, cols, rows, more, chunk)
 		} else {
 			fmt.Fprintf(&b, "\x1b_Gm=%d;%s\x1b\\", more, chunk)
 		}
@@ -156,5 +162,7 @@ func placeImage(mode graphicsMode, img image.Image, row, col, cols, rows int) st
 	return b.String()
 }
 
-// kittyClearAll removes every kitty image so redrawn charts don't stack up.
-const kittyClearAll = "\x1b_Ga=d,d=A,q=2\x1b\\"
+// kittyDelete removes the kitty image with the given id and frees its data.
+func kittyDelete(id int) string {
+	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)
+}

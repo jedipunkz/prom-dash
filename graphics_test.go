@@ -19,9 +19,20 @@ func TestDetectGraphics(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("TERM_PROGRAM", "WezTerm")
 	t.Setenv("TMUX", "")
-	if got, _ := detectGraphics("auto"); got != gfxITerm2 {
-		t.Errorf("WezTerm: got %v, want iterm2", got)
+	t.Setenv("ZELLIJ", "")
+	// Also the herdr case: panes inherit TERM_PROGRAM=WezTerm and herdr renders kitty graphics only
+	if got, _ := detectGraphics("auto"); got != gfxKitty {
+		t.Errorf("WezTerm: got %v, want kitty", got)
 	}
+	t.Setenv("TERM_PROGRAM", "iTerm.app")
+	if got, _ := detectGraphics("auto"); got != gfxITerm2 {
+		t.Errorf("iTerm2: got %v, want iterm2", got)
+	}
+	t.Setenv("ZELLIJ", "0")
+	if got, _ := detectGraphics("auto"); got != gfxBraille {
+		t.Errorf("zellij: got %v, want braille", got)
+	}
+	t.Setenv("ZELLIJ", "")
 	t.Setenv("TMUX", "/tmp/tmux-501/default,1,0")
 	if got, _ := detectGraphics("auto"); got != gfxBraille {
 		t.Errorf("tmux: got %v, want braille", got)

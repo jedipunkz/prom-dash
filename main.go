@@ -308,11 +308,14 @@ func (d *dashboard) draw(w, h int) []byte {
 	// Images only change with data or layout; re-sending them every frame would be wasteful
 	if key := fmt.Sprint(d.version, w, h); d.gfx != gfxBraille && key != d.imgKey {
 		d.imgKey = key
+		// Remove charts whose slot is no longer drawn as an image (e.g. fell back to braille)
 		if d.gfx == gfxKitty {
-			b.WriteString(kittyClearAll)
+			for id := len(jobs) + 1; id <= maxMetrics; id++ {
+				b.WriteString(kittyDelete(id))
+			}
 		}
 		bg := d.th.bg
-		for _, j := range jobs {
+		for i, j := range jobs {
 			// Blank the area first: skipped cells are never redrawn, so text left there
 			// (e.g. from a previous terminal size) would otherwise stay around the image
 			for r := range graphRows {
@@ -320,7 +323,7 @@ func (d *dashboard) draw(w, h int) []byte {
 			}
 			b.WriteString("\x1b[0m")
 			img := renderChart(j.vals, graphCols, graphRows, j.lo, j.hi, d.th)
-			b.WriteString(placeImage(d.gfx, img, j.row, j.col, graphCols, graphRows))
+			b.WriteString(placeImage(d.gfx, img, j.row, j.col, graphCols, graphRows, i+1))
 		}
 	}
 	b.WriteString("\x1b[?2026l")

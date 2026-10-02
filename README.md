@@ -82,9 +82,9 @@ metrics:
 
 | Terminal | Renderer |
 |---|---|
-| kitty, Ghostty | kitty graphics protocol |
-| WezTerm, iTerm2 | iTerm2 inline images |
-| inside tmux, others | braille |
+| kitty, Ghostty, WezTerm (also inside herdr) | kitty graphics protocol |
+| iTerm2 | iTerm2 inline images |
+| inside tmux / zellij, others | braille |
 
 Set `kitty`, `iterm2` or `braille` explicitly to override.
 
