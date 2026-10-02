@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -74,6 +75,18 @@ type chartJob struct {
 	row, col int
 	vals     [][]float64
 	lo, hi   float64
+}
+
+// configPath prefers ~/.config/prom-dash/prom-dash.yaml, falling back to the current directory.
+func configPath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		p := filepath.Join(home, ".config", "prom-dash", "prom-dash.yaml")
+		// anything but "not found" (e.g. permission denied) is surfaced by loadConfig
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			return p
+		}
+	}
+	return "prom-dash.yaml"
 }
 
 func loadConfig(path string) (config, error) {
@@ -431,7 +444,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) []chartJob {
 }
 
 func main() {
-	cfg, err := loadConfig("prom-dash.yaml")
+	cfg, err := loadConfig(configPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
