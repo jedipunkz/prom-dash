@@ -5,7 +5,7 @@ prometheus:
 
 refresh_interval: 500  # milliseconds
 range: 300  # seconds of history to display (default: 300)
-theme: retro  # retro (default), tokyonight, kanagawa-wave, solarized, dracula, gruvbox
+theme: tokyonight  # retro (default), tokyonight, kanagawa-wave, solarized, dracula, gruvbox
 graphics: auto  # auto (default), kitty, iterm2, braille
 
 metrics:
