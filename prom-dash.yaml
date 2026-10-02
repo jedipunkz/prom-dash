@@ -4,7 +4,12 @@ prometheus:
   protocol: http
 
 refresh_interval: 500  # milliseconds
-range: 300  # seconds of history to display (default: 300)
+range: 300  # seconds of history displayed at startup (default: 300)
+# Ranges switched with keys 1-4 (units: s, m, h, d)
+span1: 12h  # default: 12h
+span2: 24h  # default: 24h
+span3: 30d  # default: 30d
+span4: 180d  # default: 180d
 theme: tokyonight  # retro (default), tokyonight, kanagawa-wave, solarized, dracula, gruvbox
 graphics: auto  # auto (default), kitty, iterm2, braille
 

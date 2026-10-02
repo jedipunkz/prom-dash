@@ -33,6 +33,7 @@ const (
 	yLabelWidth = 12
 	gridWidth   = 80
 	maxMetrics  = 5
+	xTicks      = 4 // time labels under each graph
 )
 
 type config struct {
@@ -45,10 +46,22 @@ type config struct {
 	Range           float64 `yaml:"range"`            // seconds of history to display
 	Theme           string  `yaml:"theme"`
 	Graphics        string  `yaml:"graphics"` // auto, kitty, iterm2, braille
-	Metrics         []struct {
+	// Ranges selected with keys 1-4, e.g. 12h, 30d
+	Span1   string  `yaml:"span1"`
+	Span2   string  `yaml:"span2"`
+	Span3   string  `yaml:"span3"`
+	Span4   string  `yaml:"span4"`
+	spans   [4]span // parsed from Span1-4
+	Metrics []struct {
 		Name  string `yaml:"name"`
 		Query string `yaml:"query"`
 	} `yaml:"metrics"`
+}
+
+// span is a selectable range: seconds plus the text shown for it, as written in the config.
+type span struct {
+	sec   float64
+	label string
 }
 
 type series struct {
@@ -65,6 +78,8 @@ type dashboard struct {
 	points int // samples fetched per series
 
 	mu      sync.Mutex
+	rng     span    // history displayed
+	end     float64 // unix seconds of the last sample in data
 	data    map[string][]series
 	version int    // bumped on every data update
 	imgKey  string // what the charts on screen were drawn from; redraw images when it changes
@@ -104,15 +119,84 @@ func loadConfig(path string) (config, error) {
 	if cfg.RefreshInterval <= 0 {
 		cfg.RefreshInterval = 500
 	}
+	defaults := [4]string{"12h", "24h", "30d", "180d"}
+	for i, sp := range [4]string{cfg.Span1, cfg.Span2, cfg.Span3, cfg.Span4} {
+		if sp == "" {
+			sp = defaults[i]
+		}
+		v, err := parseSpan(sp)
+		if err != nil {
+			return cfg, fmt.Errorf("%s: span%d: %w", path, i+1, err)
+		}
+		cfg.spans[i] = span{v, sp}
+	}
 	return cfg, nil
 }
 
-// fetchRange fetches the whole display window via query_range, d.points samples per series.
-func (d *dashboard) fetchRange(query string) ([]series, error) {
-	step := d.cfg.Range / float64(d.points-1)
-	// Align to step so samples don't shift between refreshes
-	end := math.Floor(float64(time.Now().UnixMilli())/1000/step) * step
-	start := end - step*float64(d.points-1)
+// parseSpan parses a duration like 12h or 30d into seconds; time.ParseDuration has no day unit.
+func parseSpan(sp string) (float64, error) {
+	var v float64
+	if n, ok := strings.CutSuffix(sp, "d"); ok {
+		f, err := strconv.ParseFloat(n, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", sp)
+		}
+		v = f * 86400
+	} else {
+		dur, err := time.ParseDuration(sp)
+		if err != nil {
+			return 0, err
+		}
+		v = dur.Seconds()
+	}
+	if v <= 0 || math.IsInf(v, 0) || math.IsNaN(v) {
+		return 0, fmt.Errorf("duration must be positive: %q", sp)
+	}
+	return v, nil
+}
+
+// formatSpan renders seconds in the largest unit that divides it evenly, e.g. 30d, 12h, 300s.
+func formatSpan(sec float64) string {
+	for _, u := range []struct {
+		n    float64
+		unit string
+	}{{86400, "d"}, {3600, "h"}, {60, "m"}} {
+		if sec >= u.n && math.Mod(sec, u.n) == 0 {
+			return fmt.Sprintf("%g%s", sec/u.n, u.unit)
+		}
+	}
+	return fmt.Sprintf("%gs", sec)
+}
+
+// timeLayout picks a label format precise enough to tell the x ticks of a range apart.
+func timeLayout(rng float64) string {
+	switch {
+	case rng < 3600:
+		return "15:04:05"
+	case rng < 86400:
+		return "15:04"
+	case rng < 7*86400:
+		return "01/02 15:04"
+	}
+	return "2006-01-02"
+}
+
+// setRange switches the displayed range and drops data fetched for the old one.
+func (d *dashboard) setRange(rng span) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.rng == rng {
+		return
+	}
+	d.rng = rng
+	clear(d.data) // old samples would be drawn against the new time axis
+	d.version++
+}
+
+// fetchRange fetches the rng seconds ending at end via query_range, d.points samples per series.
+func (d *dashboard) fetchRange(query string, rng, end float64) ([]series, error) {
+	step := rng / float64(d.points-1)
+	start := end - rng
 	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 	params := url.Values{"query": {query}, "start": {f(start)}, "end": {f(end)}, "step": {f(step)}}
 	u := fmt.Sprintf("%s://%s:%d/api/v1/query_range?%s",
@@ -171,17 +255,27 @@ func (d *dashboard) fetchRange(query string) ([]series, error) {
 }
 
 func (d *dashboard) collect() {
+	d.mu.Lock()
+	rng := d.rng.sec
+	d.mu.Unlock()
+	step := rng / float64(d.points-1)
+	// Align to step so samples don't shift between refreshes
+	end := math.Floor(float64(time.Now().UnixMilli())/1000/step) * step
 	var wg sync.WaitGroup
 	for _, m := range d.cfg.Metrics {
 		wg.Go(func() {
-			s, err := d.fetchRange(m.Query)
+			s, err := d.fetchRange(m.Query, rng, end)
 			// Keep the last good data on failure (errors are not shown, same as the TS version)
 			if err != nil {
 				return
 			}
 			d.mu.Lock()
-			d.data[m.Name] = s
-			d.version++
+			// The range may have been switched while this request was in flight
+			if d.rng.sec == rng {
+				d.data[m.Name] = s
+				d.end = end
+				d.version++
+			}
 			d.mu.Unlock()
 		})
 	}
@@ -313,7 +407,11 @@ func (d *dashboard) draw(w, h int) []byte {
 	}
 	stats := fmt.Sprintf("%d | %d", total, avg)
 	s.put(h-3, (w-len(stats))/2, stats, bold)
-	s.put(h-1, 0, "--- | Press q or ESC to quit", muted)
+	var spans []string
+	for i, sp := range d.cfg.spans {
+		spans = append(spans, fmt.Sprintf("%d:%s", i+1, sp.label))
+	}
+	s.put(h-1, 0, "--- | "+strings.Join(spans, " ")+" | Press q or ESC to quit", muted)
 
 	var b bytes.Buffer
 	b.WriteString("\x1b[?2026h") // synchronized output: no flicker on terminals that support it
@@ -355,7 +453,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) []chartJob {
 		shown++
 
 		s.put(line, left, m.Name, bold)
-		s.put(line, left+len(m.Name), fmt.Sprintf("  (last %gs)", d.cfg.Range), muted)
+		s.put(line, left+len(m.Name), fmt.Sprintf("  (last %s)", d.rng.label), muted)
 		line++
 
 		lo, hi := math.Inf(1), math.Inf(-1)
@@ -410,8 +508,17 @@ func (d *dashboard) drawGrid(s *screen, line, left int) []chartJob {
 			}
 		}
 		line += graphRows
-		s.put(line, left+yLabelWidth+1, "└"+strings.Repeat("─", graphCols), muted)
-		line++
+		axis := []rune("└" + strings.Repeat("─", graphCols))
+		layout := timeLayout(d.rng.sec)
+		for i := range xTicks {
+			c := i * (graphCols - 1) / (xTicks - 1)
+			axis[1+c] = '┬'
+			t := time.Unix(int64(d.end-d.rng.sec*float64(xTicks-1-i)/float64(xTicks-1)), 0)
+			lbl := t.Format(layout)
+			s.put(line+1, min(max(chartCol+c-len(lbl)/2, left), chartCol+graphCols-len(lbl)), lbl, muted)
+		}
+		s.put(line, left+yLabelWidth+1, string(axis), muted)
+		line += 2
 
 		// Legend: one entry per series with its latest value, as many as fit on one line
 		col := left
@@ -470,6 +577,7 @@ func main() {
 		th:     th,
 		gfx:    gfx,
 		points: points,
+		rng:    span{cfg.Range, formatSpan(cfg.Range)},
 		data:   map[string][]series{},
 	}
 
@@ -495,6 +603,11 @@ func main() {
 			if err != nil {
 				quit <- syscall.SIGHUP
 				return
+			}
+			if k := buf[0]; k >= '1' && k <= '4' {
+				d.setRange(cfg.spans[k-'1'])
+				go d.collect() // don't wait for the next tick to show the new range
+				continue
 			}
 			// q, Ctrl+C, or a lone ESC (escape sequences like arrow keys arrive as one longer read)
 			if buf[0] == 'q' || buf[0] == 0x03 || (n == 1 && buf[0] == 0x1b) {
