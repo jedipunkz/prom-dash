@@ -386,6 +386,10 @@ func (d *dashboard) draw(w, h int) []byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	accent := style{fg: d.th.accent, bold: true}
+	cur := "span: " + d.rng.label
+	s.put(1, (w-len(cur))/2, cur, accent)
+
 	total := 0
 	for _, ss := range d.data {
 		for _, sr := range ss {
@@ -407,11 +411,21 @@ func (d *dashboard) draw(w, h int) []byte {
 	}
 	stats := fmt.Sprintf("%d | %d", total, avg)
 	s.put(h-3, (w-len(stats))/2, stats, bold)
-	var spans []string
-	for i, sp := range d.cfg.spans {
-		spans = append(spans, fmt.Sprintf("%d:%s", i+1, sp.label))
+	// Footer: key list with the selected span highlighted
+	col := 0
+	put := func(text string, st style) {
+		s.put(h-1, col, text, st)
+		col += utf8.RuneCountInString(text)
 	}
-	s.put(h-1, 0, "--- | "+strings.Join(spans, " ")+" | Press q or ESC to quit", muted)
+	put("--- | Press 1-4 to change span:", muted)
+	for i, sp := range d.cfg.spans {
+		if sp == d.rng {
+			put(fmt.Sprintf(" [%d:%s]", i+1, sp.label), accent)
+		} else {
+			put(fmt.Sprintf(" %d:%s", i+1, sp.label), muted)
+		}
+	}
+	put(" | Press q or ESC to quit", muted)
 
 	var b bytes.Buffer
 	b.WriteString("\x1b[?2026h") // synchronized output: no flicker on terminals that support it
