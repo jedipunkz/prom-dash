@@ -2,6 +2,13 @@ import blessed from 'blessed';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
+import { plotBraille } from './braille';
+
+const GRAPH_COLS = 60;
+const GRAPH_ROWS = 6;
+const GRAPH_POINTS = GRAPH_COLS * 2; // braille gives 2 dots per cell horizontally
+const Y_LABEL_WIDTH = 12;
+const SERIES_COLORS = ['black', 'red', 'blue', 'magenta', 'green'];
 
 interface Config {
   prometheus: {
@@ -10,30 +17,23 @@ interface Config {
     protocol: string;
   };
   refresh_interval: number;
+  range?: number; // seconds of history to display
   metrics: Array<{
     name: string;
     query: string;
   }>;
 }
 
-interface MetricData {
-  name: string;
-  value: number;
-  timestamp: number;
-}
-
-interface MetricTimeSeries {
-  name: string;
-  values: number[];
-  maxValue: number;
+interface Series {
+  label: string;
+  values: Array<number | null>; // one value per dot column, null = no sample
 }
 
 class PrometheusDash {
   private screen: blessed.Widgets.Screen;
   private config: Config;
-  private metrics: MetricData[] = [];
   private startTime: number;
-  private metricTimeSeries: Map<string, number[]> = new Map();
+  private metricSeries: Map<string, Series[]> = new Map();
 
   constructor() {
     // Load config
@@ -189,72 +189,61 @@ class PrometheusDash {
   }
 
   private updateGrid(grid: blessed.Widgets.BoxElement) {
-    const graphWidth = 60;
-    const graphHeight = 6;
+    const range = this.config.range ?? 300;
     let content = '';
 
-    const metricsToDisplay = Array.from(this.metricTimeSeries.entries()).slice(0, 5);
+    const metricsToDisplay = this.config.metrics
+      .filter((m) => this.metricSeries.has(m.name))
+      .slice(0, 5);
 
     if (metricsToDisplay.length === 0) {
       content = 'Waiting for metrics...';
     } else {
-      metricsToDisplay.forEach(([name, values]) => {
-        // Display metric name
-        content += `{bold}${name}{/bold}\n`;
+      metricsToDisplay.forEach(({ name }) => {
+        const series = this.metricSeries.get(name)!;
+        content += `{bold}${name}{/bold}  (last ${range}s)\n`;
 
-        // Draw graph
-        if (values.length === 0) {
+        const all = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
+        if (all.length === 0) {
           content += 'No data\n\n';
           return;
         }
 
-        const displayValues = values.slice(-graphWidth);
+        let min = Math.min(...all);
+        let max = Math.max(...all);
+        // Center a flat line instead of dividing by zero
+        const pad = max === min ? Math.abs(max) * 0.1 || 1 : 0;
+        min -= pad;
+        max += pad;
 
-        // Calculate dynamic range based on displayed values
-        const maxValue = Math.max(...displayValues);
-        const minValue = Math.min(...displayValues);
-        const range = maxValue - minValue;
+        const cells = plotBraille(series.map((s) => s.values), GRAPH_COLS, GRAPH_ROWS, min, max);
+        cells.forEach((row, r) => {
+          const label =
+            r === 0 ? this.formatValue(name, max) : r === GRAPH_ROWS - 1 ? this.formatValue(name, min) : '';
+          content += `${label.padStart(Y_LABEL_WIDTH)} ${label ? '┤' : '│'}`;
+          content += row
+            .map((c) => {
+              if (c.series < 0) return c.char;
+              const color = SERIES_COLORS[c.series % SERIES_COLORS.length];
+              return `{${color}-fg}${c.char}{/${color}-fg}`;
+            })
+            .join('');
+          content += '\n';
+        });
+        content += ' '.repeat(Y_LABEL_WIDTH + 1) + '└' + '─'.repeat(GRAPH_COLS) + '\n';
 
-        // Use a minimum range to avoid division by zero and show some variation
-        const effectiveRange = range < 0.0001 ? 0.0001 : range;
-        const effectiveMin = range < 0.0001 ? minValue - 0.00005 : minValue;
-
-        // Draw from top to bottom (high to low)
-        for (let row = graphHeight - 1; row >= 0; row--) {
-          const threshold = effectiveMin + (row / (graphHeight - 1)) * effectiveRange;
-          let line = '';
-
-          for (let col = 0; col < graphWidth; col++) {
-            if (col < displayValues.length) {
-              const value = displayValues[col];
-              const normalizedValue = (value - effectiveMin) / effectiveRange;
-
-              if (value >= threshold) {
-                // Use different characters based on density
-                if (normalizedValue > 0.7) {
-                  line += '█';
-                } else if (normalizedValue > 0.4) {
-                  line += '▓';
-                } else if (normalizedValue > 0.2) {
-                  line += '▒';
-                } else {
-                  line += '░';
-                }
-              } else {
-                line += ' ';
-              }
-            } else {
-              line += ' ';
-            }
-          }
-
-          content += line + '\n';
-        }
-
-        // Add axis and spacing
-        content += '─'.repeat(graphWidth) + '\n';
-        const latestValue = displayValues[displayValues.length - 1];
-        content += `Range: ${this.formatValue(name, minValue)}-${this.formatValue(name, maxValue)}  Latest: ${latestValue !== undefined ? this.formatValue(name, latestValue) : 'N/A'}\n`;
+        // Legend: one entry per series with its latest value, as many as fit on one line
+        let legend = '';
+        let used = 0;
+        series.forEach((s, i) => {
+          const latest = s.values.filter((v) => v !== null).at(-1);
+          const text = `● ${s.label.slice(0, 40)} ${latest != null ? this.formatValue(name, latest) : 'N/A'}`;
+          if (used + text.length > 78) return;
+          const color = SERIES_COLORS[i % SERIES_COLORS.length];
+          legend += `{${color}-fg}${blessed.escape(text)}{/${color}-fg}  `;
+          used += text.length + 2;
+        });
+        content += legend + '\n';
       });
     }
 
@@ -262,39 +251,65 @@ class PrometheusDash {
   }
 
   private updateScore(score: blessed.Widgets.BoxElement) {
-    const totalDataPoints = Array.from(this.metricTimeSeries.values()).reduce(
-      (sum, values) => sum + values.length,
-      0
-    );
-    const metricCount = this.metricTimeSeries.size;
+    const totalDataPoints = this.countDataPoints();
+    const metricCount = this.metricSeries.size;
 
     score.setContent(`${totalDataPoints} DR ${metricCount}`);
   }
 
   private updateStats(stats: blessed.Widgets.BoxElement) {
-    const totalDataPoints = Array.from(this.metricTimeSeries.values()).reduce(
-      (sum, values) => sum + values.length,
-      0
-    );
-    const avgPerMetric = this.metricTimeSeries.size > 0
-      ? Math.floor(totalDataPoints / this.metricTimeSeries.size)
+    const totalDataPoints = this.countDataPoints();
+    const avgPerMetric = this.metricSeries.size > 0
+      ? Math.floor(totalDataPoints / this.metricSeries.size)
       : 0;
 
     stats.setContent(`${totalDataPoints} | ${avgPerMetric}`);
   }
 
-  private async fetchMetric(query: string): Promise<number | null> {
+  private countDataPoints(): number {
+    let count = 0;
+    this.metricSeries.forEach((series) =>
+      series.forEach((s) => s.values.forEach((v) => v !== null && count++))
+    );
+    return count;
+  }
+
+  // Fetches the whole display window via query_range, one sample per dot column.
+  private async fetchRange(query: string): Promise<Series[] | null> {
     try {
-      const url = `${this.config.prometheus.protocol}://${this.config.prometheus.host}:${this.config.prometheus.port}/api/v1/query?query=${encodeURIComponent(query)}`;
+      const range = this.config.range ?? 300;
+      const step = range / (GRAPH_POINTS - 1);
+      // Align to step so samples don't shift between refreshes
+      const end = Math.floor(Date.now() / 1000 / step) * step;
+      const start = end - step * (GRAPH_POINTS - 1);
+      const params = new URLSearchParams({
+        query,
+        start: String(start),
+        end: String(end),
+        step: String(step),
+      });
+      const url = `${this.config.prometheus.protocol}://${this.config.prometheus.host}:${this.config.prometheus.port}/api/v1/query_range?${params}`;
 
       const response = await fetch(url);
-      const data = await response.json();
+      const data = (await response.json()) as {
+        status: string;
+        data: { result: Array<{ metric: Record<string, string>; values: [number, string][] }> };
+      };
 
-      if (data.status === 'success' && data.data.result.length > 0) {
-        const value = parseFloat(data.data.result[0].value[1]);
-        return isNaN(value) ? null : value;
-      }
-      return null;
+      if (data.status !== 'success') return null;
+      return data.data.result.map((r) => {
+        const values = new Array<number | null>(GRAPH_POINTS).fill(null);
+        for (const [ts, v] of r.values) {
+          const x = Math.round((ts - start) / step);
+          const n = parseFloat(v);
+          if (x >= 0 && x < GRAPH_POINTS && isFinite(n)) values[x] = n;
+        }
+        const label = Object.entries(r.metric)
+          .filter(([k]) => k !== '__name__')
+          .map(([k, v]) => `${k}=${v}`)
+          .join(',');
+        return { label: label || 'value', values };
+      });
     } catch (error) {
       return null;
     }
@@ -302,35 +317,13 @@ class PrometheusDash {
 
   private async startMetricsCollection() {
     const collectMetrics = async () => {
-      const promises = this.config.metrics.map(async (metric) => {
-        const value = await this.fetchMetric(metric.query);
-        if (value !== null) {
-          return {
-            name: metric.name,
-            value,
-            timestamp: Date.now(),
-          };
-        }
-        return null;
-      });
-
-      const results = await Promise.all(promises);
-      this.metrics = results.filter((m): m is MetricData => m !== null);
-
-      // Update time series data for each metric
-      this.metrics.forEach((m) => {
-        if (!this.metricTimeSeries.has(m.name)) {
-          this.metricTimeSeries.set(m.name, []);
-        }
-
-        const series = this.metricTimeSeries.get(m.name)!;
-        series.push(m.value);
-
-        // Keep only last 100 data points per metric
-        if (series.length > 100) {
-          this.metricTimeSeries.set(m.name, series.slice(-100));
-        }
-      });
+      await Promise.all(
+        this.config.metrics.map(async (metric) => {
+          const series = await this.fetchRange(metric.query);
+          // Keep the last good data on failure
+          if (series !== null) this.metricSeries.set(metric.name, series);
+        })
+      );
     };
 
     // Initial collection

@@ -4,6 +4,7 @@ prometheus:
   protocol: http
 
 refresh_interval: 500  # milliseconds
+range: 300  # seconds of history to display (default: 300)
 
 metrics:
   - name: cpu_usage
