@@ -2,7 +2,7 @@
 
 A TUI (Terminal User Interface) dashboard for Prometheus metrics visualization.
 
-![Prometheus Dashboard](pix/prometheus-dash.png)
+![Prometheus Dashboard](pix/prom-dash.png)
 
 ## Features
 
@@ -42,15 +42,15 @@ go run .
 or build a binary:
 
 ```bash
-go build -o prometheus-dash .
-./prometheus-dash
+go build -o prom-dash .
+./prom-dash
 ```
 
-The dashboard reads `prometheus-dash.yaml` from the current directory.
+The dashboard reads `prom-dash.yaml` from the current directory.
 
 ## Configuration
 
-Edit `prometheus-dash.yaml` to customize metrics and connection settings:
+Edit `prom-dash.yaml` to customize metrics and connection settings:
 
 ```yaml
 prometheus:

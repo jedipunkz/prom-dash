@@ -50,4 +50,4 @@ temp/
 *.tmp
 
 # Binary
-/prometheus-dash
+/prom-dash

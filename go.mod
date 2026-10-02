@@ -1,4 +1,4 @@
-module github.com/jedipunkz/prometheus-dash
+module github.com/jedipunkz/prom-dash
 
 go 1.27.1
 

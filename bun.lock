@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "prometheus-dash",
+      "name": "prom-dash",
       "dependencies": {
         "blessed": "^0.1.81",
         "js-yaml": "^4.1.0",

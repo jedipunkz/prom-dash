@@ -37,7 +37,7 @@ class PrometheusDash {
 
   constructor() {
     // Load config
-    const configPath = path.join(process.cwd(), 'prometheus-dash.yaml');
+    const configPath = path.join(process.cwd(), 'prom-dash.yaml');
     this.config = yaml.load(fs.readFileSync(configPath, 'utf8')) as Config;
     this.startTime = Date.now();
 

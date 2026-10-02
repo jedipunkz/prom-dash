@@ -431,7 +431,7 @@ func (d *dashboard) drawGrid(s *screen, line, left int) []chartJob {
 }
 
 func main() {
-	cfg, err := loadConfig("prometheus-dash.yaml")
+	cfg, err := loadConfig("prom-dash.yaml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
