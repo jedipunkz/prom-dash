@@ -46,7 +46,11 @@ go build -o prom-dash .
 ./prom-dash
 ```
 
+`make build` / `make run` / `make test` / `make vet` / `make clean` are also available.
+
 The dashboard reads `~/.config/prom-dash/prom-dash.yaml` if it exists, otherwise `prom-dash.yaml` in the current directory.
+
+Keys: `1`-`4` switch the displayed range to `span1`-`span4`, `q` / `ESC` quits. The dashboard starts with `range`.
 
 ## Configuration
 
@@ -59,7 +63,12 @@ prometheus:
   protocol: http
 
 refresh_interval: 500  # milliseconds
-range: 300  # seconds of history to display (default: 300)
+range: 300  # seconds of history displayed at startup (default: 300)
+# Ranges switched with keys 1-4 (units: s, m, h, d)
+span1: 12h  # default: 12h
+span2: 24h  # default: 24h
+span3: 30d  # default: 30d
+span4: 180d  # default: 180d
 theme: retro  # retro (default), tokyonight, kanagawa-wave, solarized, dracula, gruvbox
 graphics: auto  # auto (default), kitty, iterm2, braille
 
