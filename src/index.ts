@@ -1,5 +1,6 @@
 import blessed from 'blessed';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
 import { plotBraille } from './braille';
@@ -37,7 +38,9 @@ class PrometheusDash {
 
   constructor() {
     // Load config
-    const configPath = path.join(process.cwd(), 'prom-dash.yaml');
+    // Prefer ~/.config/prom-dash/prom-dash.yaml, fall back to the current directory
+    const userConfig = path.join(os.homedir(), '.config', 'prom-dash', 'prom-dash.yaml');
+    const configPath = fs.existsSync(userConfig) ? userConfig : path.join(process.cwd(), 'prom-dash.yaml');
     this.config = yaml.load(fs.readFileSync(configPath, 'utf8')) as Config;
     this.startTime = Date.now();
 

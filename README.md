@@ -46,7 +46,7 @@ go build -o prom-dash .
 ./prom-dash
 ```
 
-The dashboard reads `prom-dash.yaml` from the current directory.
+The dashboard reads `~/.config/prom-dash/prom-dash.yaml` if it exists, otherwise `prom-dash.yaml` in the current directory.
 
 ## Configuration
 
